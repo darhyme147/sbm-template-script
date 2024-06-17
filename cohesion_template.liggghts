@@ -1,0 +1,179 @@
+###################################################################################
+########-------------------------------------------------------------------########
+########----------- DEM INPUT SCRIPT FOR CFD-DEM COUPLED MODEL ------------########
+########-------------------------------------------------------------------########
+###################################################################################
+
+######## ---- THIS SHOULD BE UP UNTIL I WANT TO COUPLE THE TWO MODELS ---- ########
+
+log simulation_inputs/vsm_run.log
+
+atom_style      granular
+atom_modify     map array
+communicate     single vel yes
+
+boundary        f f f
+newton          off
+
+units           si
+processors     2 2 1
+
+##########################################################################################
+###------------DEFINING THE SYSTEM CONSTRAINTS AND PARTICLE PROPERTY VALUES------------###
+##########################################################################################
+
+######## System variables ########
+
+# Definition of boundaries
+variable	xmin	 equal	 -0.1401
+variable	xmax	 equal	  0.1401
+variable	ymin	 equal	 -0.1401
+variable	ymax	 equal	  0.1401
+variable	zmin	 equal	 -0.0001
+variable	zmax	 equal	  0.1801
+
+variable        dt       equal    1e-6
+
+######## Specific simulation constraints ########
+variable	natoms   equal	  2				#1 -> particle, #2-> geometry
+
+# Variables for material properties
+variable	ym1      equal	 2.1e7			#N/m^2
+variable	ym2	 equal	 2.1e7			#N/m^2
+
+variable	pois1	 equal	 0.3			#poisson number
+variable	pois2	 equal	 0.3
+
+# Variables for contact properties
+variable	CoR11	 equal	 0.4			#coeff of restitution
+variable	CoR12	 equal	 0.4
+variable	CoR21	 equal	 0.4
+variable	CoR22	 equal	 0.4
+
+variable	sf11	 equal	 0.4			#sliding friction
+variable	sf12	 equal	 0.4
+variable	sf21	 equal	 0.4
+variable	sf22	 equal	 0.4
+
+variable	rf11	 equal	 0.0			#rolling friction
+variable	rf12	 equal	 0.0
+variable	rf21	 equal	 0.0
+variable	rf22	 equal	 0.0
+
+variable	ce11	 equal	 100000			#rolling friction
+variable	ce12	 equal	 500000
+variable	ce21	 equal	 500000
+variable	ce22	 equal	 0.0
+
+variable	nradii	 equal	 2
+variable	radius1  equal	 0.002			#m
+variable	radius2	 equal	 0.002			#m
+variable	frac1	 equal	 0.5
+variable	frac2	 equal	 0.5
+variable	density	 equal	 2500			#kg/m^3
+
+variable        rpm      equal   400
+variable        period   equal   60/${rpm}
+
+################################################################
+###------------DEFINING EACH OF THE PROCESS STEPS------------###
+################################################################
+
+######## Filling parameters ########
+variable	filltime	 equal	 2.0			 #s
+variable	fillmass	 equal	 1.027			 #kg
+variable	fillmassrate equal	 ${fillmass}/${filltime} #kg/s
+variable	fillsteps	 equal	 ${filltime}/${dt}	 #Converts the time into a number of timesteps
+
+######## Settling time ########
+variable	settletime	 equal	 1.0			 #s
+variable	settlesteps  equal	 ${settletime}/${dt}	 #Converts the time into a number of timesteps
+
+######## Acceleration ########
+variable	acceltime	 equal   5.0
+variable	accelsteps   equal	 ${acceltime}/${dt}
+variable	w			 equal   (${rpm}/30.0)*PI*(step-3000000)*(1.0/5000000)
+
+######## Settling time ########
+variable	runtime	 equal	 6.0			 #s
+variable	runsteps  equal	 ${runtime}/${dt}	 #Converts the time into a number of timesteps
+
+
+region          reg block ${xmin} ${xmax} ${ymin} ${ymax} ${zmin} ${zmax} units box
+create_box      2 reg
+neighbor        0.0001 bin
+neigh_modify    delay 0
+
+##################################################
+###------------PARTICLE DEFINITIONS------------###
+##################################################
+
+######### Definition of the contact models ########
+pair_style	gran model hertz tangential history cohesion sjkr rolling_friction epsd2 computeDissipatedEnergy on	#contact model
+pair_coeff	* *
+
+#default
+timestep	${dt}
+fix		integrator all nve/sphere		#default
+fix		gravi all gravity 9.81			vector 0.0 0.0 -1.0
+
+######## Definition of material properties ########
+fix	m1		all property/global youngsModulus peratomtype ${ym1} ${ym2}
+fix	m2		all property/global poissonsRatio peratomtype ${pois1} ${pois2}
+fix	m3		all property/global coefficientRestitution peratomtypepair ${natoms} ${CoR11} ${CoR12} ${CoR21} ${CoR22}
+fix	m4		all property/global coefficientFriction peratomtypepair ${natoms} ${sf11} ${sf12} ${sf21} ${sf22}
+fix 	m5 		all property/global characteristicVelocity scalar 2.
+fix 	m6 		all property/global cohesionEnergyDensity peratomtypepair ${natoms} ${ce11} ${ce12} ${ce21} ${ce22}
+fix	m7		all property/global coefficientRollingFriction peratomtypepair ${natoms} ${rf11} ${rf12} ${rf21} ${rf22}
+fix	m8		all property/global k_finnie peratomtypepair 2  1.0 1.0 1.0 1.0
+
+#################################################################################
+###------------CREATING THE PARTICLES AND GEOMETRY WITHIN LIGGGHTS------------###
+#################################################################################
+
+######## Generation and Loading of the Geometry ########
+fix	vessel  all mesh/surface file Meshes/vessel.stl		        type 2 scale 1.0
+fix     attritor   all mesh/surface file Meshes/attritor.stl		        type 2 scale 1.0 curvature_tolerant yes
+
+fix	walls      all wall/gran model hertz tangential history mesh n_meshes 2 meshes vessel attritor
+
+######## Genaration and insertion of particles ########
+fix			pts1		all particletemplate/sphere 16127 atom_type 1 density constant ${density} radius constant ${radius1}
+fix			pts2		all particletemplate/sphere 11887 atom_type 1 density constant ${density} radius constant ${radius2}
+fix			pddl		all particledistribution/discrete 32452867 ${nradii} pts1 ${frac1} pts2 ${frac2}
+
+fix			ins_mesh	all mesh/surface/planar file Meshes/filler.stl		type 1 scale 1.0
+fix			ins all insert/stream seed 86028157 distributiontemplate pddl &
+				mass ${fillmass} massrate ${fillmassrate} overlapcheck yes all_in yes vel constant 0 0 -0.50 &
+				insertion_face ins_mesh extrude_length 0.04
+
+shell mkdir post
+
+variable dumptime equal	0.05 #One dump every 0.05s
+variable dumpstep equal	${dumptime}/${dt}
+#dump     dmp all custom/vtk ${dumpstep} Outputs/particles_*.vtk id type x y z ix iy iz vx vy vz fx fy fz omegax omegay omegaz radius
+
+restart ${dumpstep} data.restart data.restart
+
+####################################################
+###------------RUNNING THE SIMULATION------------###
+####################################################
+
+######## RUN the filling step ########
+run ${fillsteps}
+unfix ins
+
+######## RUN the simulation settling ########
+run ${settlesteps}
+
+######## RUN the acceleration stage ########
+fix			accelattritor	 all	 move/mesh mesh attritor rotate/variable origin 0. 0. 0. &
+									axis 0. 0. 1. omega v_w								#Rotates the Shaft
+run ${accelsteps}
+
+unfix		accelattritor
+
+fix moveattritor all	 move/mesh mesh attritor rotate origin 0. 0. 0. &
+	axis 0. 0. 1. period 0.15 #Rotates the Shaft at 50rpm
+
+run ${runsteps}
